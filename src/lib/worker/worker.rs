@@ -1,5 +1,5 @@
-use super::types::{Worker, valid_state_transition};
-use crate::lib::tasks::types::{DockerClient, DockerResult, State, Task, new_config};
+use super::types::{Worker};
+use crate::lib::tasks::{state::valid_state_transition, types::{new_config, DockerClient, DockerResult, State, Task}};
 use std::{io::Error, io::ErrorKind::Other, time::SystemTime};
 
 impl Worker {
