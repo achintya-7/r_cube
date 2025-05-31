@@ -1,5 +1,5 @@
 pub mod worker;
-pub mod task;
+pub mod tasks;
 pub mod manager;
 pub mod scheduler;
 pub mod node;
