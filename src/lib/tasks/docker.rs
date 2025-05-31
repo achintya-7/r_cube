@@ -1,9 +1,8 @@
-use std::{collections::HashMap, io::Write};
+use std::{error::Error, io::Write};
 
 use bollard::{
     Docker,
     container::{CreateContainerOptions, StartContainerOptions},
-    errors::Error,
     image::CreateImageOptions,
     secret::{HostConfig, Resources, RestartPolicy, RestartPolicyNameEnum},
 };
@@ -14,16 +13,16 @@ use crate::lib::tasks::types::DockerResult;
 use super::types::{Config, DockerClient};
 
 impl DockerResult {
-    fn with_error(err: Error) -> Self {
-        DockerResult {
-            container_id: None,
-            action: None,
-            result: None,
-            error: Some(err),
+    pub fn with_error(err: Box<dyn Error>) -> Self {
+            DockerResult {
+                container_id: None,
+                action: None,
+                result: None,
+                error: Some(err),
+            }
         }
-    }
 
-    fn success(container_id: String, action: String, result: String) -> Self {
+    pub fn success(container_id: String, action: String, result: String) -> Self {
         DockerResult {
             container_id: Some(container_id),
             action: Some(action),
@@ -34,8 +33,13 @@ impl DockerResult {
 }
 
 impl DockerClient {
-    pub fn new(client: Docker, config: Config) -> Self {
-        DockerClient { client, config }
+    pub fn new(config: Config) -> Option<Self> {
+        let docker_client = Docker::connect_with_unix_defaults().ok()?;
+
+        Some(DockerClient {
+            client: docker_client,
+            config,
+        })
     }
 
     pub async fn run(&self) -> DockerResult {
@@ -61,7 +65,7 @@ impl DockerClient {
                 }
                 Err(e) => {
                     eprintln!("\nError during image pull stream: {:?}", e);
-                    return DockerResult::with_error(e);
+                    return DockerResult::with_error(Box::new(e));
                 }
             }
         }
@@ -131,7 +135,7 @@ impl DockerClient {
             }
             Err(e) => {
                 eprintln!("Error creating container: {:?}", e);
-                return DockerResult::with_error(e);
+                return DockerResult::with_error(Box::new(e));
             }
         };
 
@@ -144,16 +148,12 @@ impl DockerClient {
 
         if let Err(e) = start_result {
             eprintln!("Error starting container {}: {:?}", self.config.name, e);
-            return DockerResult::with_error(e);
+            return DockerResult::with_error(Box::new(e));
         }
 
         println!("Container started successfully: {}", resp_id);
 
-        DockerResult::success(
-            resp_id,
-            "Start".to_string(),
-            "success".to_string(),
-        )
+        DockerResult::success(resp_id, "Start".to_string(), "success".to_string())
     }
 
     pub async fn stop(&self, container_id: &str) -> DockerResult {
@@ -171,7 +171,7 @@ impl DockerClient {
             }
             Err(e) => {
                 eprintln!("Error stopping container {}: {:?}", container_id, e);
-                DockerResult::with_error(e)
+                DockerResult::with_error(Box::new(e))
             }
         }
     }

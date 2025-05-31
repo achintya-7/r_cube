@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
 
-    let my_docker = DockerClient::new(docker_client, config);
+    let my_docker = DockerClient::new(config).expect("Failed to create Docker client");
     let result = my_docker.run().await;
 
     match result.error {

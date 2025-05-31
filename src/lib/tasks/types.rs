@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-use bollard::{Docker, errors::Error};
+use std::{collections::HashMap, error::Error};
 
-#[derive(Debug, Clone)]
+use bollard::Docker;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum State {
     Pending,
     Scheduled,
@@ -13,6 +14,7 @@ pub enum State {
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: uuid::Uuid,
+    pub container_id: Option<String>,
     pub name: String,
     pub state: State,
     pub image: String,
@@ -49,6 +51,15 @@ pub struct Config {
     pub restart_policy: String,
 }
 
+pub fn new_config(task: Task) -> Config {
+    return Config{
+        name: task.name,
+        image: task.image,
+        restart_policy: task.restart_policy,
+        ..Default::default()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DockerClient {
     pub client: Docker,
@@ -57,7 +68,7 @@ pub struct DockerClient {
 
 #[derive(Debug)]
 pub struct DockerResult {
-    pub error: Option<Error>,
+    pub error: Option<Box<dyn Error>>,
     pub action: Option<String>,
     pub container_id: Option<String>,
     pub result: Option<String>,
