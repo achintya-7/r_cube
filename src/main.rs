@@ -2,7 +2,7 @@ use std::error::Error;
 
 use lib::worker::{
     types::{TaskServer, Worker},
-    worker::run_tasks,
+    worker::{collect_stats, run_tasks},
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -20,7 +20,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     {
         let worker = worker.clone();
-        tokio::spawn(async move { run_tasks(worker).await });
+        let sysinfo_worker = worker.clone();
+        tokio::spawn(async move {
+            let stats_task = collect_stats(worker);
+            let tasks_task = run_tasks(sysinfo_worker);
+            tokio::join!(stats_task, tasks_task);
+        });
     }
 
     worker_server.start_server().await;
