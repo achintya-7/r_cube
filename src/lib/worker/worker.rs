@@ -1,13 +1,27 @@
-use super::types::{Worker};
-use crate::lib::tasks::{state::valid_state_transition, types::{new_config, DockerClient, DockerResult, State, Task}};
-use std::{io::Error, io::ErrorKind::Other, time::SystemTime};
+use tokio::sync::Mutex;
+
+use super::types::Worker;
+use crate::lib::tasks::{
+    state::valid_state_transition,
+    types::{DockerClient, DockerResult, State, Task, new_config},
+};
+use std::{io::{Error, ErrorKind::Other}, sync::Arc, time::SystemTime};
 
 impl Worker {
-    pub fn collect_stats(&self) {
-        println!("I will collect stats");
+    pub fn new(name: &str) -> Self {
+        Worker {
+            name: name.to_string(),
+            queue: std::collections::VecDeque::new(),
+            db: std::collections::HashMap::new(),
+            task_count: 0,
+        }
     }
 
-    pub async fn run_task(&mut self) -> DockerResult {
+    // pub fn collect_stats(&self) {
+    //     println!("I will collect stats");
+    // }
+
+    async fn run_task(&mut self) -> DockerResult {
         let task_queued = match self.queue.pop_front() {
             Some(task) => task,
             None => {
@@ -48,7 +62,10 @@ impl Worker {
             }
 
             _ => {
-                println!("Invalid state for task: {:?} with id: {:?}", task_queued.state, task_queued.id);
+                println!(
+                    "Invalid state for task: {:?} with id: {:?}",
+                    task_queued.state, task_queued.id
+                );
                 return DockerResult::with_error(Box::new(Error::new(
                     Other,
                     "Invalid state for task",
@@ -57,7 +74,7 @@ impl Worker {
         }
     }
 
-    pub async fn start_task(&mut self, mut task: Task) -> DockerResult {
+    async fn start_task(&mut self, mut task: Task) -> DockerResult {
         task.start_time = Some(SystemTime::now());
         let config = new_config(task.clone());
 
@@ -102,7 +119,7 @@ impl Worker {
         self.queue.push_back(task.clone());
     }
 
-    pub async fn stop_task(&mut self, mut task: Task) -> DockerResult {
+    async fn stop_task(&mut self, mut task: Task) -> DockerResult {
         let config = new_config(task.clone());
 
         let docker_client = match DockerClient::new(config) {
@@ -142,5 +159,27 @@ impl Worker {
 
     pub fn get_tasks(&self) -> Vec<Task> {
         return self.db.values().cloned().map(|task| *task).collect();
+    }
+}
+
+pub async fn run_tasks(worker: Arc<Mutex<Worker>>) {
+    loop {
+        if !worker.lock().await.queue.is_empty() {
+            match worker.lock().await.run_task().await {
+                DockerResult {
+                    error: Some(err), ..
+                } => {
+                    println!("Error running task: {:?}", err);
+                }
+                DockerResult { .. } => {
+                    println!("Task completed successfully");
+                }
+            }
+        } else {
+            println!("No tasks in queue, waiting...");
+        }
+
+        // Sleep for a while before checking the queue again
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }

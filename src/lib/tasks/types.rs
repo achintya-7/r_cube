@@ -1,8 +1,9 @@
 use std::{collections::HashMap, error::Error};
 
 use bollard::Docker;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum State {
     Pending,
     Scheduled,
@@ -11,7 +12,7 @@ pub enum State {
     Failed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: uuid::Uuid,
     pub container_id: Option<String>,
@@ -27,7 +28,7 @@ pub struct Task {
     pub finish_time: Option<std::time::SystemTime>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {
     pub task_id: uuid::Uuid,
     pub event_type: String,
