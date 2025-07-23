@@ -5,7 +5,6 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-use uuid::Uuid;
 
 use super::types::{TaskServer, Worker};
 use crate::lib::tasks::types::State;
@@ -24,29 +23,29 @@ impl TaskServer {
     }
 
     async fn get_tasks(AxumState(server): AxumState<Arc<Mutex<TaskServer>>>) -> Json<Vec<Task>> {
-        let server = server.lock().await;
-        let worker = server.worker.lock().await;
-        Json(worker.get_tasks())
+        let worker = server.lock().await.worker.clone();
+        let tasks = worker.lock().await.get_tasks();
+        Json(tasks)
     }
 
     async fn start_task(
         AxumState(server): AxumState<Arc<Mutex<TaskServer>>>,
         Json(task_event): Json<TaskEvent>,
     ) -> impl IntoResponse {
-        let server = server.lock().await;
-        server.worker.lock().await.add_task(task_event.task.clone());
+        let worker = server.lock().await.worker.clone();
+        worker.lock().await.add_task(task_event.task.clone());
         println!("Task Queued to start: {:?}", task_event.task_id);
         StatusCode::CREATED
     }
 
     async fn stop_task(
         AxumState(server): AxumState<Arc<Mutex<TaskServer>>>,
-        Path(id): Path<Uuid>,
+        Path(id): Path<String>,
     ) -> impl IntoResponse {
-        let server = server.lock().await;
-
-        let mut task_to_stop = match server.worker.lock().await.db.get(&id) {
-            Some(task) => task.clone(),
+        let worker = server.lock().await.worker.clone();
+        let mut guard = worker.lock().await;
+        let task = match guard.db.get(&id) {
+            Some(task) => task.as_ref().clone(),
             None => {
                 return (
                     StatusCode::NOT_FOUND,
@@ -55,10 +54,9 @@ impl TaskServer {
             }
         };
 
-        task_to_stop.state = State::Completed;
-
-        server.worker.lock().await.add_task(*task_to_stop);
-
+        let mut stopped_task = task;
+        stopped_task.state = State::Completed;
+        guard.add_task(stopped_task);
         println!("Task stopped: {:?}", id);
         (StatusCode::OK, format!("Task with id {} stopped", id))
     }
@@ -66,21 +64,20 @@ impl TaskServer {
     pub async fn start_server(self) {
         let address = self.address.clone();
         let port = self.port.clone();
-
-        let shared_server = Arc::new(Mutex::new(self));
-
+        let shared = Arc::new(Mutex::new(self));
         println!("Starting TaskServer at {}:{}", address, port);
+
         let app = Router::new()
             .route("/tasks", get(TaskServer::get_tasks))
             .route("/tasks", post(TaskServer::start_task))
             .route("/tasks/{id}", delete(TaskServer::stop_task))
-            .with_state(shared_server);
+            .with_state(shared);
 
-        // Start the server
         println!("Listening on {}:{}", address, port);
         let listener = TcpListener::bind(format!("{}:{}", address, port))
             .await
             .unwrap();
+
         axum::serve(listener, app).await.unwrap();
     }
 }

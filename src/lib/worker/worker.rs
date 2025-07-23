@@ -28,7 +28,7 @@ impl Worker {
     }
 
     async fn run_task(&mut self) -> DockerResult {
-        let task_queued = match self.queue.pop_front() {
+        let task = match self.queue.pop_front() {
             Some(task) => task,
             None => {
                 println!("No tasks in queue");
@@ -36,19 +36,15 @@ impl Worker {
             }
         };
 
-        let task_persisted = match self.db.get(&task_queued.id) {
-            Some(task) => task,
-            None => {
-                self.db
-                    .insert(task_queued.id, Box::new(task_queued.clone()));
-                &task_queued
-            }
-        };
+        let persisted = self
+            .db
+            .entry(task.id.clone())
+            .or_insert_with(|| Box::new(task.clone()));
 
-        if !valid_state_transition(&task_persisted.state, &task_queued.state) {
+        if !valid_state_transition(&persisted.state, &task.state) {
             println!(
                 "Invalid state transition from {:?} to {:?}",
-                task_persisted.state, task_queued.state
+                persisted.state, task.state
             );
             return DockerResult::with_error(Box::new(Error::new(
                 Other,
@@ -56,26 +52,21 @@ impl Worker {
             )));
         }
 
-        match task_queued.state {
+        match task.state {
             State::Scheduled => {
                 println!("Task is scheduled, starting it now");
-                return self.start_task(task_queued).await;
+                self.start_task(task).await
             }
-
             State::Completed => {
-                println!("Task is already running, stopping it now");
-                return self.stop_task(task_queued).await;
+                println!("Task is completed, stopping it now");
+                self.stop_task(task).await
             }
-
             _ => {
                 println!(
                     "Invalid state for task: {:?} with id: {:?}",
-                    task_queued.state, task_queued.id
+                    task.state, task.id
                 );
-                return DockerResult::with_error(Box::new(Error::new(
-                    Other,
-                    "Invalid state for task",
-                )));
+                DockerResult::with_error(Box::new(Error::new(Other, "Invalid state for task")))
             }
         }
     }
@@ -96,38 +87,31 @@ impl Worker {
         };
 
         let result = docker_client.run().await;
-        match &result.error {
-            Some(err) => {
-                println!("Error running task: {:?}", err);
-                task.state = State::Failed;
-                return result;
-            }
-            None => {
-                println!(
-                    "Task started successfully with container ID: {:?}",
-                    result.container_id
-                );
-
-                let container_id = result.container_id.clone().unwrap();
-
-                task.finish_time = Some(SystemTime::now());
-                task.state = State::Running;
-                task.container_id = Some(container_id.clone());
-
-                self.db.insert(task.id, Box::new(task.clone()));
-
-                return result;
-            }
+        if result.error.is_some() {
+            println!("Error running task: {:?}", result.error);
+            task.state = State::Failed;
+            return result;
         }
+        println!(
+            "Task started successfully with container ID: {:?}",
+            result.container_id
+        );
+
+        if let Some(container_id) = result.container_id.clone() {
+            task.finish_time = Some(SystemTime::now());
+            task.state = State::Running;
+            task.container_id = Some(container_id);
+            self.db.insert(task.id.clone(), Box::new(task.clone()));
+        }
+        result
     }
 
     pub fn add_task(&mut self, task: Task) {
-        self.queue.push_back(task.clone());
+        self.queue.push_back(task);
     }
 
     async fn stop_task(&mut self, mut task: Task) -> DockerResult {
         let config = new_config(task.clone());
-
         let docker_client = match DockerClient::new(config) {
             Some(client) => client,
             None => {
@@ -139,32 +123,37 @@ impl Worker {
             }
         };
 
-        let container_id = task.container_id.clone().unwrap();
+        let container_id = match task.container_id.clone() {
+            Some(id) => id,
+            None => {
+                println!("No container_id for task");
+                return DockerResult::with_error(Box::new(Error::new(
+                    Other,
+                    "No container_id for task",
+                )));
+            }
+        };
 
         let result = docker_client.stop(&container_id).await;
-        match &result.error {
-            Some(err) => {
-                println!("Error stopping task: {:?}", err);
-                return result;
-            }
-            None => {
-                task.state = State::Completed;
-                task.finish_time = Some(SystemTime::now());
-
-                self.db.insert(task.id, Box::new(task.clone()));
-
-                println!(
-                    "Stopped and removed task with container ID: {:?}",
-                    result.container_id
-                );
-
-                return result;
-            }
+        if result.error.is_some() {
+            println!("Error stopping task: {:?}", result.error);
+            return result;
         }
+
+        task.state = State::Completed;
+        task.finish_time = Some(SystemTime::now());
+
+        self.db.insert(task.id.clone(), Box::new(task.clone()));
+        println!(
+            "Stopped and removed task with container ID: {:?}",
+            result.container_id
+        );
+       
+        result
     }
 
     pub fn get_tasks(&self) -> Vec<Task> {
-        return self.db.values().cloned().map(|task| *task).collect();
+        self.db.values().map(|task| task.as_ref().clone()).collect()
     }
 }
 

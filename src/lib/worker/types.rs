@@ -9,7 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 pub struct Worker {
     pub name: String,
     pub queue: std::collections::VecDeque<Task>,
-    pub db: HashMap<uuid::Uuid, Box<Task>>,
+    pub db: HashMap<String, Box<Task>>,
     pub task_count: u64,
     pub sysinfo: sysinfo::System,
 }

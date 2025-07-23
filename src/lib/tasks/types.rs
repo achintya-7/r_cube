@@ -14,7 +14,7 @@ pub enum State {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
-    pub id: uuid::Uuid,
+    pub id: String,
     pub container_id: Option<String>,
     pub name: String,
     pub state: State,
@@ -30,7 +30,7 @@ pub struct Task {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {
-    pub task_id: uuid::Uuid,
+    pub task_id: String,
     pub event_type: String,
     pub timestamp: Option<std::time::SystemTime>,
     pub task: Task,
@@ -53,12 +53,12 @@ pub struct Config {
 }
 
 pub fn new_config(task: Task) -> Config {
-    return Config{
+    return Config {
         name: task.name,
         image: task.image,
         restart_policy: task.restart_policy,
         ..Default::default()
-    }
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -76,4 +76,3 @@ pub struct DockerResult {
 }
 
 impl Task {}
-

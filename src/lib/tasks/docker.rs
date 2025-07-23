@@ -19,11 +19,11 @@ impl DockerResult {
         }
     }
 
-    pub fn success(container_id: String, action: String, result: String) -> Self {
+    pub fn success(container_id: String, action: &str) -> Self {
         DockerResult {
             container_id: Some(container_id),
-            action: Some(action),
-            result: Some(result),
+            action: Some(action.to_string()),
+            result: Some("success".to_string()),
             error: None,
         }
     }
@@ -32,17 +32,14 @@ impl DockerResult {
 impl DockerClient {
     pub fn new(config: Config) -> Option<Self> {
         let docker_client = Docker::connect_with_unix_defaults().ok()?;
-
         Some(DockerClient {
             client: docker_client,
             config,
         })
     }
 
-    pub async fn run(&self) -> DockerResult {
-        // Image pull
+    async fn pull_image(&self) -> Result<(), Box<dyn Error>> {
         println!("Pulling image: {}", self.config.image);
-
         let mut stream = self.client.create_image(
             Some(CreateImageOptions {
                 from_image: self.config.image.clone(),
@@ -62,14 +59,16 @@ impl DockerClient {
                 }
                 Err(e) => {
                     eprintln!("\nError during image pull stream: {:?}", e);
-                    return DockerResult::with_error(Box::new(e));
+                    return Err(Box::new(e));
                 }
             }
         }
 
         println!("\nImage pulled: {}", self.config.image);
+        Ok(())
+    }
 
-        // Restart policy
+    fn host_config(&self) -> HostConfig {
         let restart_policy = RestartPolicy {
             name: Some(
                 self.config
@@ -80,24 +79,23 @@ impl DockerClient {
             maximum_retry_count: None,
         };
 
-        // Resources
-        let resources: Resources = Resources {
+        let resources = Resources {
             memory: Some(self.config.memory),
             nano_cpus: Some((self.config.cpu * 1_000_000_000.0) as i64),
             ..Default::default()
         };
 
-        // Host Config
-        let host_config: HostConfig = HostConfig {
+        HostConfig {
             restart_policy: Some(restart_policy),
             nano_cpus: resources.nano_cpus,
             memory: resources.memory,
             publish_all_ports: Some(true),
             ..Default::default()
-        };
+        }
+    }
 
-        // Container Config
-        let container_config = bollard::container::Config {
+    fn container_config(&self) -> bollard::container::Config<String> {
+        bollard::container::Config {
             image: Some(self.config.image.clone()),
             env: Some(self.config.env.clone()),
             exposed_ports: Some(
@@ -113,24 +111,26 @@ impl DockerClient {
                     })
                     .collect(),
             ),
-            host_config: Some(host_config),
+            host_config: Some(self.host_config()),
             ..Default::default()
-        };
+        }
+    }
 
-        // Container creation options
+    pub async fn run(&self) -> DockerResult {
+        if let Err(e) = self.pull_image().await {
+            return DockerResult::with_error(e);
+        }
+
         let options = Some(CreateContainerOptions {
             name: self.config.name.clone(),
             ..Default::default()
         });
 
-        // Create container
-        let create_result = self
+        let container_id = match self
             .client
-            .create_container(options, container_config)
-            .await;
-
-        // Handle container creation result
-        let resp_id = match create_result {
+            .create_container(options, self.container_config())
+            .await
+        {
             Ok(resp) => {
                 println!("Container created successfully: {}", resp.id);
                 resp.id
@@ -141,37 +141,27 @@ impl DockerClient {
             }
         };
 
-        // Start container
-        println!("Starting container: {}", resp_id);
-        match self
+        println!("Starting container: {}", container_id);
+
+        if let Err(e) = self
             .client
-            .start_container(&resp_id, None::<StartContainerOptions<String>>)
+            .start_container(&container_id, None::<StartContainerOptions<String>>)
             .await
         {
-            Ok(_) => println!("Container {} started successfully.", self.config.name),
-            Err(e) => {
-                eprintln!("Error starting container {}: {:?}", self.config.name, e);
-                return DockerResult::with_error(Box::new(e));
-            }
+            eprintln!("Error starting container {}: {:?}", self.config.name, e);
+            return DockerResult::with_error(Box::new(e));
         }
-
-        println!("Container started successfully: {}", resp_id);
-
-        DockerResult::success(resp_id, "Start".to_string(), "success".to_string())
+        
+        println!("Container {} started successfully.", self.config.name);
+        DockerResult::success(container_id, "Start")
     }
 
     pub async fn stop(&self, container_id: &str) -> DockerResult {
         println!("Stopping container: {}", container_id);
-        let stop_result = self.client.stop_container(container_id, None).await;
-        
-        match stop_result {
+        match self.client.stop_container(container_id, None).await {
             Ok(_) => {
                 println!("Container stopped successfully: {}", container_id);
-                DockerResult::success(
-                    container_id.to_string(),
-                    "Stop".to_string(),
-                    "success".to_string(),
-                )
+                DockerResult::success(container_id.to_string(), "Stop")
             }
             Err(e) => {
                 eprintln!("Error stopping container {}: {:?}", container_id, e);
