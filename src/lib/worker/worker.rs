@@ -5,9 +5,9 @@ use super::types::Worker;
 use crate::lib::{
     tasks::{
         state::valid_state_transition,
-        types::{DockerClient, DockerResult, State, Task, new_config},
+        types::{new_config, DockerClient, DockerResult, State, Task},
     },
-    worker::types::{SystemStats, get_stats},
+    worker::{stats::get_stats, types::SystemStats},
 };
 use std::{
     io::{Error, ErrorKind::Other},

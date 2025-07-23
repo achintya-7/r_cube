@@ -7,8 +7,11 @@ use axum::{
 };
 
 use super::types::{TaskServer, Worker};
-use crate::lib::tasks::types::State;
 use crate::lib::tasks::types::{Task, TaskEvent};
+use crate::lib::{
+    tasks::types::State,
+    worker::{stats::get_stats, types::SystemStats},
+};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -61,6 +64,16 @@ impl TaskServer {
         (StatusCode::OK, format!("Task with id {} stopped", id))
     }
 
+    pub async fn get_stats(
+        AxumState(server): AxumState<Arc<Mutex<TaskServer>>>,
+    ) -> impl IntoResponse {
+        let worker_guard = server.lock().await.worker.clone();
+        let mut worker_guard = worker_guard.lock().await;
+        worker_guard.sysinfo.refresh_all();
+        let stats = get_stats(&worker_guard.sysinfo, worker_guard.task_count);
+        (StatusCode::OK, Json(stats))
+    }
+
     pub async fn start_server(self) {
         let address = self.address.clone();
         let port = self.port.clone();
@@ -68,6 +81,7 @@ impl TaskServer {
         println!("Starting TaskServer at {}:{}", address, port);
 
         let app = Router::new()
+            .route("/stats", get(TaskServer::get_stats))
             .route("/tasks", get(TaskServer::get_tasks))
             .route("/tasks", post(TaskServer::start_task))
             .route("/tasks/{id}", delete(TaskServer::stop_task))
