@@ -122,7 +122,7 @@ impl DockerClient {
         }
 
         let options = Some(CreateContainerOptions {
-            name: self.config.name.clone(),
+            name: self.config.name.replace(' ', "-"),
             ..Default::default()
         });
 
@@ -151,7 +151,7 @@ impl DockerClient {
             eprintln!("Error starting container {}: {:?}", self.config.name, e);
             return DockerResult::with_error(Box::new(e));
         }
-        
+
         println!("Container {} started successfully.", self.config.name);
         DockerResult::success(container_id, "Start")
     }

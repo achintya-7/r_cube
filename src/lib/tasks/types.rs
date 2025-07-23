@@ -28,12 +28,42 @@ pub struct Task {
     pub finish_time: Option<std::time::SystemTime>,
 }
 
+impl Default for Task {
+    fn default() -> Self {
+        Task {
+            id: uuid::Uuid::new_v4().to_string(),
+            container_id: None,
+            name: String::new(),
+            state: State::Pending,
+            image: String::new(),
+            memory: 0,
+            disk: 0,
+            exposed_ports: Vec::new(),
+            port_bindings: HashMap::new(),
+            restart_policy: String::new(),
+            start_time: None,
+            finish_time: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {
     pub task_id: String,
     pub event_type: String,
     pub timestamp: Option<std::time::SystemTime>,
     pub task: Task,
+}
+
+impl Default for TaskEvent {
+    fn default() -> Self {
+        TaskEvent {
+            task_id: String::new(),
+            event_type: String::new(),
+            timestamp: None,
+            task: Task::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]

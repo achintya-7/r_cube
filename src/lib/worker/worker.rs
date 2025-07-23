@@ -5,7 +5,7 @@ use super::types::Worker;
 use crate::lib::{
     tasks::{
         state::valid_state_transition,
-        types::{new_config, DockerClient, DockerResult, State, Task},
+        types::{DockerClient, DockerResult, State, Task, new_config},
     },
     worker::{stats::get_stats, types::SystemStats},
 };
@@ -148,7 +148,7 @@ impl Worker {
             "Stopped and removed task with container ID: {:?}",
             result.container_id
         );
-       
+
         result
     }
 
@@ -185,7 +185,6 @@ pub async fn collect_stats(worker: Arc<Mutex<Worker>>) {
         let mut worker_guard = worker.lock().await;
         worker_guard.sysinfo.refresh_all();
         let stats = get_stats(&worker_guard.sysinfo, worker_guard.task_count);
-        println!("System Stats: {}", serde_json::to_string(&stats).unwrap());
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }
