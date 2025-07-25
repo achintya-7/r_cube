@@ -1,7 +1,6 @@
 use crate::lib::tasks::types::Task;
 use crate::lib::{manager::types::Manager, tasks::types::TaskEvent};
 use std::io::{Error, ErrorKind};
-use std::time::SystemTime;
 
 impl Manager {
     pub fn new(workers: Vec<String>) -> Self {
@@ -17,7 +16,8 @@ impl Manager {
     }
 
     pub fn select_worker(&mut self) -> String {
-        let mut new_worker: u16 = 0;
+        let mut new_worker = 0;
+
         if self.last_worker + 1 < self.workers.len() as u16 {
             new_worker = self.last_worker + 1;
         } else {
@@ -35,7 +35,7 @@ impl Manager {
             let tasks = self.get_worker_tasks(worker.clone()).await?;
             for task in tasks {
                 if let Some(_) = self.event_db.get(&task.id) {
-                    println!("Attepting to update task: {}", task.id);
+                    println!("Attempting to update task: {}", task.id);
 
                     if self.task_db.contains_key(&task.id) {
                         let local_task = self.task_db.get(&task.id).unwrap();
@@ -59,8 +59,18 @@ impl Manager {
         Ok(())
     }
 
-    pub fn add_task(&mut self, task: Task) {
-        self.pending.push_back(task.clone());
+    pub fn add_task(&mut self, task_event: TaskEvent) {
+        self.pending.push_back(task_event.clone());
+    }
+
+    pub fn get_all_tasks(&self) -> Vec<Task> {
+        let mut tasks = Vec::new();
+
+        for task in self.task_db.clone().into_iter() {
+            tasks.push(task.1);
+        }
+
+        tasks
     }
 
     async fn get_worker_tasks(
@@ -117,26 +127,20 @@ impl Manager {
         if !self.pending.is_empty() {
             let worker = self.select_worker();
 
-            let event = self.pending.pop_back().unwrap();
-            let task_event = TaskEvent {
-                task_id: event.id.clone(),
-                event_type: "scheduled".to_string(),
-                timestamp: Some(SystemTime::now()),
-                task: event.clone(),
-            };
+            let task_event = self.pending.pop_back().unwrap();
 
             self.event_db
-                .insert(event.id.clone().to_string(), task_event.clone());
-
+                .insert(task_event.task_id.clone(), task_event.clone());
             self.worker_task_hash_map
                 .entry(worker.clone())
                 .or_default()
-                .push(event.id.clone());
+                .push(task_event.task_id.clone());
 
             self.task_worker_hash_map
-                .insert(event.id.clone(), worker.clone());
+                .insert(task_event.task_id.clone(), worker.clone());
 
-            self.task_db.insert(event.id.clone(), event);
+            self.task_db
+                .insert(task_event.task_id.clone(), task_event.task.clone());
 
             let resp = self.send_worker_event(worker, task_event).await;
             match resp {

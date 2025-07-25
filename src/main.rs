@@ -48,14 +48,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 task.image = "hello-world:latest".to_string();
                 task.name = format!("Test Container {}", i);
 
-                let mut task_event = TaskEvent::default();
+                let task_event = TaskEvent {
+                    task_id: uuid::Uuid::new_v4().to_string(),
+                    event_type: "running".to_string(),
+                    timestamp: Some(std::time::SystemTime::now()),
+                    task: task,
+                };
 
-                task_event.task_id = uuid::Uuid::new_v4().to_string();
-                task_event.event_type = "running".to_string();
-                task_event.timestamp = Some(std::time::SystemTime::now());
-                task_event.task = task.clone();
-
-                manager.add_task(task.clone());
+                manager.add_task(task_event.clone());
                 manager.send_work().await;
             }
         }
