@@ -1,3 +1,4 @@
+use error_stack::Report;
 use sysinfo::System;
 use tokio::sync::Mutex;
 
@@ -5,15 +6,11 @@ use super::types::Worker;
 use crate::lib::{
     tasks::{
         state::valid_state_transition,
-        types::{DockerClient, DockerResult, State, Task, new_config},
+        types::{new_config, DockerClient, DockerError, DockerResult, State, Task},
     },
-    worker::{stats::get_stats, types::SystemStats},
+    worker::{stats::get_stats, types::{SystemStats, WorkerError}},
 };
-use std::{
-    io::{Error, ErrorKind::Other},
-    sync::Arc,
-    time::SystemTime,
-};
+use std::{error::Error, fmt, sync::Arc, time::SystemTime};
 
 impl Worker {
     pub fn new(name: &str) -> Self {
@@ -32,7 +29,11 @@ impl Worker {
             Some(task) => task,
             None => {
                 println!("No tasks in queue");
-                return DockerResult::with_error(Box::new(Error::new(Other, "No tasks in queue")));
+                let error_report = Report::new(WorkerError::NoTasksInQueue).change_context(
+                    DockerError::ClientError("No tasks available in worker queue".to_string()),
+                );
+
+                return Err(error_report);
             }
         };
 
@@ -46,10 +47,19 @@ impl Worker {
                 "Invalid state transition from {:?} to {:?}",
                 persisted.state, task.state
             );
-            return DockerResult::with_error(Box::new(Error::new(
-                Other,
-                "Invalid state transition",
-            )));
+            let error_msg = format!(
+                "Invalid transition from {:?} to {:?}",
+                persisted.state, task.state
+            );
+
+            // Using change_context to add more context to the error
+            let error_report = Report::new(WorkerError::InvalidStateTransition(error_msg))
+                .change_context(DockerError::ClientError(format!(
+                    "State transition validation failed for task {}",
+                    task.id
+                )));
+
+            return Err(error_report);
         }
 
         match task.state {
@@ -66,7 +76,16 @@ impl Worker {
                     "Invalid state for task: {:?} with id: {:?}",
                     task.state, task.id
                 );
-                DockerResult::with_error(Box::new(Error::new(Other, "Invalid state for task")))
+                let error_report = Report::new(WorkerError::InvalidStateTransition(format!(
+                    "Invalid state {:?} for task {}",
+                    task.state, task.id
+                )))
+                .change_context(DockerError::ClientError(format!(
+                    "Task {} has invalid state {:?} for execution",
+                    task.id, task.state
+                )));
+
+                Err(error_report)
             }
         }
     }
@@ -79,31 +98,42 @@ impl Worker {
             Some(client) => client,
             None => {
                 println!("Failed to create Docker client");
-                return DockerResult::with_error(Box::new(Error::new(
-                    Other,
-                    "Failed to create Docker client",
+
+                // Using change_context to provide more specific context
+                let error_report = Report::new(WorkerError::DockerClientError(
+                    "Docker client creation failed".to_string(),
+                ))
+                .change_context(DockerError::ClientError(format!(
+                    "Unable to initialize Docker client for task {}",
+                    task.id
                 )));
+
+                return Err(error_report);
             }
         };
 
         let result = docker_client.run().await;
-        if result.error.is_some() {
-            println!("Error running task: {:?}", result.error);
-            task.state = State::Failed;
-            return result;
-        }
-        println!(
-            "Task started successfully with container ID: {:?}",
-            result.container_id
-        );
+        match result {
+            Ok(response) => {
+                println!(
+                    "Task started successfully with container ID: {:?}",
+                    response.container_id
+                );
 
-        if let Some(container_id) = result.container_id.clone() {
-            task.finish_time = Some(SystemTime::now());
-            task.state = State::Running;
-            task.container_id = Some(container_id);
-            self.db.insert(task.id.clone(), Box::new(task.clone()));
+                if let Some(container_id) = response.container_id.clone() {
+                    task.finish_time = Some(SystemTime::now());
+                    task.state = State::Running;
+                    task.container_id = Some(container_id);
+                    self.db.insert(task.id.clone(), Box::new(task.clone()));
+                }
+                Ok(response)
+            }
+            Err(err) => {
+                println!("Error running task: {:?}", err);
+                task.state = State::Failed;
+                Err(err)
+            }
         }
-        result
     }
 
     pub fn add_task(&mut self, task: Task) {
@@ -116,10 +146,16 @@ impl Worker {
             Some(client) => client,
             None => {
                 println!("Failed to create Docker client");
-                return DockerResult::with_error(Box::new(Error::new(
-                    Other,
-                    "Failed to create Docker client",
+                // Using change_context for richer context about the stop operation
+                let error_report = Report::new(WorkerError::DockerClientError(
+                    "Docker client creation failed during stop operation".to_string(),
+                ))
+                .change_context(DockerError::ClientError(format!(
+                    "Unable to initialize Docker client to stop task {}",
+                    task.id
                 )));
+
+                return Err(error_report);
             }
         };
 
@@ -127,29 +163,39 @@ impl Worker {
             Some(id) => id,
             None => {
                 println!("No container_id for task");
-                return DockerResult::with_error(Box::new(Error::new(
-                    Other,
-                    "No container_id for task",
+                // Using error-stack here too for consistency
+                let error_report = Report::new(WorkerError::DockerClientError(format!(
+                    "Task {} has no container_id for stop operation",
+                    task.id
+                )))
+                .change_context(DockerError::ClientError(format!(
+                    "Cannot stop task {} without container_id",
+                    task.id
                 )));
+
+                return Err(error_report);
             }
         };
 
         let result = docker_client.stop(&container_id).await;
-        if result.error.is_some() {
-            println!("Error stopping task: {:?}", result.error);
-            return result;
+        match result {
+            Ok(response) => {
+                task.state = State::Completed;
+                task.finish_time = Some(SystemTime::now());
+
+                self.db.insert(task.id.clone(), Box::new(task.clone()));
+                println!(
+                    "Stopped and removed task with container ID: {:?}",
+                    response.container_id
+                );
+
+                Ok(response)
+            }
+            Err(err) => {
+                println!("Error stopping task: {:?}", err);
+                Err(err)
+            }
         }
-
-        task.state = State::Completed;
-        task.finish_time = Some(SystemTime::now());
-
-        self.db.insert(task.id.clone(), Box::new(task.clone()));
-        println!(
-            "Stopped and removed task with container ID: {:?}",
-            result.container_id
-        );
-
-        result
     }
 
     pub fn get_tasks(&self) -> Vec<Task> {
@@ -161,13 +207,11 @@ pub async fn run_tasks(worker: Arc<Mutex<Worker>>) {
     loop {
         if !worker.lock().await.queue.is_empty() {
             match worker.lock().await.run_task().await {
-                DockerResult {
-                    error: Some(err), ..
-                } => {
-                    println!("Error running task: {:?}", err);
+                Ok(response) => {
+                    println!("Task completed successfully: {:?}", response.container_id);
                 }
-                DockerResult { .. } => {
-                    println!("Task completed successfully");
+                Err(err) => {
+                    println!("Error running task: {:?}", err);
                 }
             }
         } else {
@@ -184,7 +228,7 @@ pub async fn collect_stats(worker: Arc<Mutex<Worker>>) {
         println!("Collecting system stats... ");
         let mut worker_guard = worker.lock().await;
         worker_guard.sysinfo.refresh_all();
-        let stats = get_stats(&worker_guard.sysinfo, worker_guard.task_count);
+        let _stats = get_stats(&worker_guard.sysinfo, worker_guard.task_count);
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
 }

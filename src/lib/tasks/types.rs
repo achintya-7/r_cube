@@ -1,6 +1,7 @@
-use std::{collections::HashMap, error::Error};
+use std::{collections::HashMap, error::Error, fmt};
 
 use bollard::Docker;
+use error_stack;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -46,6 +47,8 @@ impl Default for Task {
         }
     }
 }
+
+impl Task {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {
@@ -97,12 +100,37 @@ pub struct DockerClient {
     pub config: Config,
 }
 
+// * DockerResponse is a simplified response type for Docker operations
 #[derive(Debug)]
-pub struct DockerResult {
-    pub error: Option<Box<dyn Error>>,
+pub struct DockerResponse {
+    pub error: Option<DockerError>,
     pub action: Option<String>,
     pub container_id: Option<String>,
-    pub result: Option<String>,
 }
 
-impl Task {}
+#[derive(Debug, Clone, PartialEq)]
+pub enum DockerError {
+    ClientError(String),
+    ImagePullError(String),
+    ContainerCreationError(String),
+    ContainerStartError(String),
+    ContainerStopError(String),
+}
+
+impl fmt::Display for DockerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DockerError::ClientError(msg) => write!(f, "Docker client error: {}", msg),
+            DockerError::ImagePullError(msg) => write!(f, "Docker image pull error: {}", msg),
+            DockerError::ContainerCreationError(msg) => {
+                write!(f, "Container creation error: {}", msg)
+            }
+            DockerError::ContainerStartError(msg) => write!(f, "Container start error: {}", msg),
+            DockerError::ContainerStopError(msg) => write!(f, "Container stop error: {}", msg),
+        }
+    }
+}
+
+impl Error for DockerError {}
+
+pub type DockerResult = Result<DockerResponse, error_stack::Report<DockerError>>;

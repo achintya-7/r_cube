@@ -4,6 +4,8 @@ use crate::lib::tasks::types::Task;
 use crate::lib::tasks::types::TaskEvent;
 use std::collections::HashMap;
 
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -22,3 +24,34 @@ pub struct ManagerServer {
     pub port: String,
     pub manager: Arc<Mutex<Manager>>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ManagerError {
+    NoWorkersAvailable,
+    WorkerCommunication(String),
+    NetworkError(String),
+}
+
+impl fmt::Display for ManagerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ManagerError::NoWorkersAvailable => {
+                write!(f, "No workers are available to handle tasks")
+            }
+            ManagerError::WorkerCommunication(msg) => {
+                write!(f, "Worker communication failed: {}", msg)
+            }
+            ManagerError::NetworkError(msg) => {
+                write!(f, "Network error: {}", msg)
+            }
+        }
+    }
+}
+
+impl Error for ManagerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+}
+
+pub type ManagerResult<T> = Result<T, ManagerError>;

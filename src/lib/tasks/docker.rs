@@ -1,33 +1,14 @@
 use super::types::{Config, DockerClient};
-use crate::lib::tasks::types::DockerResult;
+use crate::lib::tasks::types::{DockerError, DockerResponse, DockerResult};
 use bollard::{
     Docker,
     container::{CreateContainerOptions, StartContainerOptions},
     image::CreateImageOptions,
     secret::{HostConfig, Resources, RestartPolicy, RestartPolicyNameEnum},
 };
+use error_stack::Report;
 use futures_util::stream::StreamExt;
 use std::{error::Error, io::Write};
-
-impl DockerResult {
-    pub fn with_error(err: Box<dyn Error>) -> Self {
-        DockerResult {
-            container_id: None,
-            action: None,
-            result: None,
-            error: Some(err),
-        }
-    }
-
-    pub fn success(container_id: String, action: &str) -> Self {
-        DockerResult {
-            container_id: Some(container_id),
-            action: Some(action.to_string()),
-            result: Some("success".to_string()),
-            error: None,
-        }
-    }
-}
 
 impl DockerClient {
     pub fn new(config: Config) -> Option<Self> {
@@ -118,7 +99,7 @@ impl DockerClient {
 
     pub async fn run(&self) -> DockerResult {
         if let Err(e) = self.pull_image().await {
-            return DockerResult::with_error(e);
+            return Err(Report::new(DockerError::ImagePullError(e.to_string())));
         }
 
         let options = Some(CreateContainerOptions {
@@ -137,7 +118,10 @@ impl DockerClient {
             }
             Err(e) => {
                 eprintln!("Error creating container: {:?}", e);
-                return DockerResult::with_error(Box::new(e));
+                return Err(Report::new(DockerError::ContainerCreationError(format!(
+                    "Failed to create container: {}",
+                    e
+                ))));
             }
         };
 
@@ -149,11 +133,18 @@ impl DockerClient {
             .await
         {
             eprintln!("Error starting container {}: {:?}", self.config.name, e);
-            return DockerResult::with_error(Box::new(e));
+            return Err(Report::new(DockerError::ContainerStartError(format!(
+                "Failed to start container: {}",
+                e
+            ))));
         }
 
         println!("Container {} started successfully.", self.config.name);
-        DockerResult::success(container_id, "Start")
+        Ok(DockerResponse {
+            error: None,
+            action: Some("Start".to_string()),
+            container_id: Some(container_id),
+        })
     }
 
     pub async fn stop(&self, container_id: &str) -> DockerResult {
@@ -161,11 +152,18 @@ impl DockerClient {
         match self.client.stop_container(container_id, None).await {
             Ok(_) => {
                 println!("Container stopped successfully: {}", container_id);
-                DockerResult::success(container_id.to_string(), "Stop")
+                Ok(DockerResponse {
+                    error: None,
+                    action: Some("Stop".to_string()),
+                    container_id: Some(container_id.to_string()),
+                })
             }
             Err(e) => {
                 eprintln!("Error stopping container {}: {:?}", container_id, e);
-                DockerResult::with_error(Box::new(e))
+                Err(Report::new(DockerError::ContainerStopError(format!(
+                    "Failed to stop container: {}",
+                    e
+                ))))
             }
         }
     }

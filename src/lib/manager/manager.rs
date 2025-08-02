@@ -1,6 +1,6 @@
+use crate::lib::manager::types::{ManagerError, ManagerResult};
 use crate::lib::tasks::types::Task;
 use crate::lib::{manager::types::Manager, tasks::types::TaskEvent};
-use std::io::{Error, ErrorKind};
 
 impl Manager {
     pub fn new(workers: Vec<String>) -> Self {
@@ -15,20 +15,23 @@ impl Manager {
         }
     }
 
-    pub fn select_worker(&mut self) -> String {
-        let mut new_worker = 0;
-
-        if self.last_worker + 1 < self.workers.len() as u16 {
-            new_worker = self.last_worker + 1;
-        } else {
-            new_worker = 0;
-            self.last_worker = 0;
+    pub fn select_worker(&mut self) -> ManagerResult<String> {
+        if self.workers.is_empty() {
+            return Err(ManagerError::NoWorkersAvailable);
         }
 
-        return self.workers[new_worker as usize].clone();
+        let new_worker = if self.last_worker + 1 < self.workers.len() as u16 {
+            self.last_worker + 1
+        } else {
+            self.last_worker = 0;
+            0
+        };
+
+        self.last_worker = new_worker;
+        Ok(self.workers[new_worker as usize].clone())
     }
 
-    pub async fn update_task(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn update_task(&mut self) -> ManagerResult<()> {
         for worker in &self.workers {
             println!("Checking worker: {}", worker);
 
@@ -38,18 +41,18 @@ impl Manager {
                     println!("Attempting to update task: {}", task.id);
 
                     if self.task_db.contains_key(&task.id) {
-                        let local_task = self.task_db.get(&task.id).unwrap();
+                        if let Some(local_task) = self.task_db.get(&task.id) {
+                            let new_task = Task {
+                                container_id: task.container_id.clone(),
+                                start_time: task.start_time,
+                                finish_time: task.finish_time,
+                                state: task.state.clone(),
+                                ..local_task.clone()
+                            };
 
-                        let new_task = Task {
-                            container_id: task.container_id.clone(),
-                            start_time: task.start_time,
-                            finish_time: task.finish_time,
-                            state: task.state.clone(),
-                            ..local_task.clone()
-                        };
-
-                        if local_task.state != task.state {
-                            self.task_db.insert(task.id.clone(), new_task);
+                            if local_task.state != task.state {
+                                self.task_db.insert(task.id.clone(), new_task);
+                            }
                         }
                     }
                 }
@@ -64,45 +67,38 @@ impl Manager {
     }
 
     pub fn get_all_tasks(&self) -> Vec<Task> {
-        let mut tasks = Vec::new();
-
-        for task in self.task_db.clone().into_iter() {
-            tasks.push(task.1);
-        }
-
-        tasks
+        self.task_db.values().cloned().collect()
     }
 
-    async fn get_worker_tasks(
-        &self,
-        worker: String,
-    ) -> Result<Vec<Task>, Box<dyn std::error::Error>> {
+    async fn get_worker_tasks(&self, worker: String) -> ManagerResult<Vec<Task>> {
         let url = format!("http://{}/tasks/", worker);
 
         let client = reqwest::Client::new();
-        let resp = client.get(&url).send().await?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|_| ManagerError::NetworkError(format!("Failed to connect to {}", url)))?;
 
         if resp.status().is_success() {
-            let tasks: Vec<Task> = resp.json().await?;
+            let tasks: Vec<Task> = resp.json().await.map_err(|_| {
+                ManagerError::WorkerCommunication(format!(
+                    "Failed to parse response from worker {}",
+                    worker
+                ))
+            })?;
             println!("Tasks from worker {}: {:?}", worker, tasks);
             Ok(tasks)
         } else {
-            Err(Box::new(Error::new(
-                ErrorKind::Other,
-                format!(
-                    "Failed to fetch tasks from worker {}: {:?}",
-                    worker,
-                    resp.status()
-                ),
+            Err(ManagerError::WorkerCommunication(format!(
+                "Worker {} returned status {}",
+                worker,
+                resp.status().as_u16()
             )))
         }
     }
 
-    async fn send_worker_event(
-        &self,
-        worker: String,
-        task_event: TaskEvent,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn send_worker_event(&self, worker: String, task_event: TaskEvent) -> ManagerResult<()> {
         let url = format!("http://{}/tasks", worker);
 
         let client = reqwest::Client::new();
@@ -111,26 +107,28 @@ impl Manager {
             .header("Content-Type", "application/json")
             .json(&task_event)
             .send()
-            .await?;
+            .await
+            .map_err(|_| ManagerError::NetworkError(format!("Failed to connect to {}", url)))?;
 
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(Box::new(Error::new(
-                ErrorKind::Other,
-                format!("Failed to send event: {:?}", response.status()),
+            Err(ManagerError::WorkerCommunication(format!(
+                "Failed to send task {} to worker {}",
+                task_event.task_id, worker
             )))
         }
     }
 
-    pub async fn send_work(&mut self) {
+    pub async fn send_work(&mut self) -> ManagerResult<()> {
         if !self.pending.is_empty() {
-            let worker = self.select_worker();
+            let worker = self.select_worker()?;
 
             let task_event = self.pending.pop_back().unwrap();
 
             self.event_db
                 .insert(task_event.task_id.clone(), task_event.clone());
+
             self.worker_task_hash_map
                 .entry(worker.clone())
                 .or_default()
@@ -142,17 +140,19 @@ impl Manager {
             self.task_db
                 .insert(task_event.task_id.clone(), task_event.task.clone());
 
-            let resp = self.send_worker_event(worker, task_event).await;
-            match resp {
+            match self.send_worker_event(worker, task_event).await {
                 Ok(_) => {
                     println!("Event sent successfully");
+                    Ok(())
                 }
                 Err(e) => {
                     eprintln!("Error sending event: {:?}", e);
+                    Err(e)
                 }
             }
         } else {
             println!("No pending tasks to send");
+            Ok(())
         }
     }
 }
